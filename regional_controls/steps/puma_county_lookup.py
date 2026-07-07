@@ -1,7 +1,7 @@
 import pandas as pd
 import geopandas as gpd
 
-from utils import Util
+from regional_controls.utils import Util
 
 
 #------------------------------
@@ -45,7 +45,7 @@ def create_puma_county_lookup(util):
     puma_cnty['region'] = 1
 
     # save to csv in data directory
-    puma_cnty[['PUMA','puma_id','county_id','region']].to_csv(util.get_data_dir() + '/puma_geog_lookup_cnty.csv', index=False)
+    puma_cnty[['PUMA','puma_id','county_id','region']].to_csv(util.get_data_dir('puma_geog_lookup_cnty.csv'), index=False)
 
 
 def run_step(context):

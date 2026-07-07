@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from utils import Util
+from regional_controls.utils import Util
 
 
 def _get_regional_controls_stem(util: Util) -> str:

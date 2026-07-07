@@ -1,4 +1,4 @@
-from utils.util import Util
+from regional_controls.utils.util import Util
 
 
 def write_tables(util):

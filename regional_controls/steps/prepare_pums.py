@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 import numpy as np
-from utils import Util
+from regional_controls.utils import Util
 
 
 def _get_input_filename(util, tablename):

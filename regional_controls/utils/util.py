@@ -9,7 +9,8 @@ class Util:
         """
         Initialize Util with settings loaded from a YAML file.
         """
-        self.settings_path = settings_path
+        self.settings_path = Path(settings_path).resolve()
+        self.base_dir = self.settings_path.parent
         
         with open(f"{self.settings_path}/settings.yaml", 'r') as file:
             self.settings = yaml.safe_load(file)
@@ -18,17 +19,21 @@ class Util:
         create_directory(path=self.get_data_dir())
         create_directory(path=self.get_output_dir())
 
+    def _resolve_workspace_path(self, configured_path, default_name):
+        path = Path(configured_path or default_name)
+        if not path.is_absolute():
+            path = self.base_dir / path
+        return path
+
     def get_settings_path(self):
         # Returns the path to the settings directory
         return self.settings_path
 
-    def get_data_dir(self):
-        # Returns the data directory path from settings.yaml
-        return self.settings.get('data_dir', 'data')
-    
-    def get_output_dir(self):
-        # Returns the output directory path from settings.yaml
-        return self.settings.get('output_dir', 'output')
+    def get_data_dir(self, *path_parts):
+        return self._resolve_workspace_path(self.settings.get('data_dir'), 'data').joinpath(*path_parts)
+
+    def get_output_dir(self, *path_parts):
+        return self._resolve_workspace_path(self.settings.get('output_dir'), 'output').joinpath(*path_parts)
 
     def get_setting(self, key, default=None):
         # Returns a single setting value from settings.yaml

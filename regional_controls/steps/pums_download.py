@@ -4,7 +4,7 @@ from zipfile import ZipFile
 import io
 from urllib.request import urlopen
 
-from utils import Util
+from regional_controls.utils import Util
 
 
 def get_data(census_year, pums_table, state_id_str, state_abbr, util, overwrite=True):
@@ -19,7 +19,7 @@ def get_data(census_year, pums_table, state_id_str, state_abbr, util, overwrite=
         state_abbr (str): State abbreviation in lowercase.
         overwrite (bool): If True, delete existing file and download new one.
     """
-    data_dir = util.settings['data_dir']
+    data_dir = util.get_data_dir()
     file_name = f"psam_{pums_table}{state_id_str}.csv"
     file_path = os.path.join(data_dir, file_name)
 
@@ -31,7 +31,8 @@ def get_data(census_year, pums_table, state_id_str, state_abbr, util, overwrite=
             print(f"File already exists, skipping download: {file_path}")
             return
 
-    pums_url = f"https://www2.census.gov/programs-surveys/acs/data/pums/{census_year}/5-Year/csv_{pums_table}{state_abbr}.zip"
+    pums_type = util.settings['pums_type']
+    pums_url = f"https://www2.census.gov/programs-surveys/acs/data/pums/{census_year}/{pums_type}/csv_{pums_table}{state_abbr}.zip"
     r = urlopen(pums_url).read()
     archive = ZipFile(io.BytesIO(r))
     archive.extract(file_name, data_dir)

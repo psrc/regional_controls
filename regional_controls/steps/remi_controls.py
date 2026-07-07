@@ -2,8 +2,8 @@ import re
 import numpy as np
 import pandas as pd
 
-from utils import Util
-from steps.prepare_pums import (
+from regional_controls.utils import Util
+from regional_controls.steps.prepare_pums import (
 	_build_industry_lookup,
 	_build_occupation_crosswalk,
 	_normalize_industry_text,
@@ -179,88 +179,98 @@ def build_remi_controls(util):
 	pums_hh = util.get_table("pums_households_prepared")
 	remi = util.get_table("regional_controls")
 	gq_rates, headship_rates, labor_force_participation_rates, hhsz_rates, workers_per_hhsz_rates = _calculate_pums_rates(pums_person, pums_hh)
+	util.save_table("gq_rates", gq_rates.reset_index().rename(columns={'PWGTP': 'gq_rate'}))
+	util.save_table("headship_rates", headship_rates.reset_index().rename(columns={0: 'headship_rate'}))
 
 	forecast_year = util.get_setting("forecast_year")
 	category_col = "category" if "category" in remi.columns else "Category"
 	age_col = category_col
-	year_col = forecast_year
-
-	# Process age groups and calculate gq, hh, hhpop - all coming from REMI pop by age
-	remi_age = remi.loc[
-		remi[age_col].astype(str).str.contains("ages_", na=False),
-		["county_id", age_col, year_col],
-	].copy()
-	remi_age[year_col] = remi_age[year_col] * 1000
-	remi_age = remi_age.rename(columns={age_col: "age_group", year_col: "total_pop"})
-	remi_age = remi_age.set_index(["county_id", "age_group"])
-
-	remi_age["gq"] = remi_age.index.map(gq_rates).fillna(0) * remi_age["total_pop"]
-	remi_age["hhpop"] = remi_age["total_pop"] - remi_age["gq"]
-	remi_age["hh"] = remi_age["hhpop"] * remi_age.index.map(headship_rates).fillna(0)
 	
-	# sum totals for use in control totals process
-	counties_summed = remi_age.groupby('county_id')[['total_pop','hhpop','gq','hh']].sum().round(0).astype(int)
-	region_summed = (
-		remi_age[['total_pop','hhpop','gq','hh']].sum().round(0).astype(int)
-		.to_frame(name=f'{forecast_year}').reset_index(names='variable')
-	)
+	counties_summed_all_years = pd.DataFrame()
+	for year in range(util.get_setting("base_year"), forecast_year + 1):
+		year_col = year
+		# Process age groups and calculate gq, hh, hhpop - all coming from REMI pop by age
+		remi_age = remi.loc[
+			remi[age_col].astype(str).str.contains("ages_", na=False),
+			["county_id", age_col, year_col],
+		].copy()
+		remi_age[year_col] = remi_age[year_col] * 1000
+		remi_age = remi_age.rename(columns={age_col: "age_group", year_col: "total_pop"})
+		remi_age = remi_age.set_index(["county_id", "age_group"])
 
-	# Calculate labor force by industry and occupation using Pums-workers to REMI-employment ratios
-	remi_emp = _process_occupation_codes(remi, util, category_col, year_col)
-	remi_ind = _process_industry_codes(remi, util, category_col, year_col)
-	
-	# sum employment for military and non-military for use in control totals process
-	military_out = remi_ind.copy()
-	military_out['military_employment'] = np.where(military_out['industry'] == '99', military_out['employment'], 0)
-	military_out['non_military_employment'] = np.where(military_out['industry'] != '99', military_out['employment'], 0)
-	region_emp_summed = (
-		military_out[[ 'non_military_employment','military_employment','employment']]
-		.sum().round(0).astype(int).to_frame(name=f'{forecast_year}').reset_index(names='variable')
-	)
-	region_summed = pd.concat([region_summed,region_emp_summed], ignore_index=True)
-	util.save_table("region_summed", region_summed)
-	
-	county_emp_summed = military_out.groupby('county_id')[['employment', 'military_employment', 'non_military_employment']].sum().round(0).astype(int)
-	counties_summed = counties_summed.merge(county_emp_summed, left_index=True, right_index=True)
-	util.save_table("counties_summed", counties_summed.reset_index())
+		remi_age["gq"] = remi_age.index.map(gq_rates).fillna(0) * remi_age["total_pop"]
+		remi_age["hhpop"] = remi_age["total_pop"] - remi_age["gq"]
+		remi_age["hh"] = remi_age["hhpop"] * remi_age.index.map(headship_rates).fillna(0)
+		
+		# sum totals for use in control totals process
+		counties_summed = remi_age.groupby('county_id')[['total_pop','hhpop','gq','hh']].sum().round(0).astype(int)
+		counties_summed_all_years = pd.concat([counties_summed_all_years, counties_summed.reset_index().assign(year=year)], ignore_index=True)
+		region_summed = (
+			remi_age[['total_pop','hhpop','gq','hh']].sum().round(0).astype(int)
+			.to_frame(name=f'{year}').reset_index(names='variable')
+		)
 
-	non_gq_workers_ind = get_non_gq_workers(pums_person, 'industry')
-	worker_to_emp_ratio_ind = get_workers_to_remi_emp_ratio(util, non_gq_workers_ind, util.get_setting('base_year'), category_col)
-	remi_ind['industry'] = pd.to_numeric(remi_ind['industry'], errors='coerce')
-	remi_ind = remi_ind.set_index(['county_id','industry'])['employment']
-	remi_labor_force_ind = remi_ind * worker_to_emp_ratio_ind
-	
-	non_gq_workers_occ = get_non_gq_workers(pums_person, 'occupation')
-	worker_to_emp_ratio_occ = get_workers_to_remi_emp_ratio_occ(util, non_gq_workers_occ, util.get_setting('base_year'), category_col)
-	remi_emp = remi_emp.rename(columns={'occupation_code':'occupation'}).set_index(['county_id','occupation'])['employment']
-	remi_labor_force_occ = remi_emp * worker_to_emp_ratio_occ
+		# Calculate labor force by industry and occupation using Pums-workers to REMI-employment ratios
+		remi_emp = _process_occupation_codes(remi, util, category_col, year_col)
+		remi_ind = _process_industry_codes(remi, util, category_col, year_col)
+		
+		# sum employment for military and non-military for use in control totals process
+		military_out = remi_ind.copy()
+		military_out['military_employment'] = np.where(military_out['industry'] == '99', military_out['employment'], 0)
+		military_out['non_military_employment'] = np.where(military_out['industry'] != '99', military_out['employment'], 0)
+		region_emp_summed = (
+			military_out[[ 'non_military_employment','military_employment','employment']]
+			.sum().round(0).astype(int).to_frame(name=f'{year}').reset_index(names='variable')
+		)
+		region_summed = pd.concat([region_summed,region_emp_summed], ignore_index=True)
+		if year == forecast_year:
+			util.save_table("region_summed", region_summed)
+		
+		county_emp_summed = military_out.groupby('county_id')[['employment', 'military_employment', 'non_military_employment']].sum().round(0).astype(int)
+		counties_summed = counties_summed.merge(county_emp_summed, left_index=True, right_index=True)
+		if year == forecast_year:
+			util.save_table("counties_summed", counties_summed.reset_index())
+		
+		non_gq_workers_ind = get_non_gq_workers(pums_person, 'industry')
+		worker_to_emp_ratio_ind = get_workers_to_remi_emp_ratio(util, non_gq_workers_ind, util.get_setting('base_year'), category_col)
+		remi_ind['industry'] = pd.to_numeric(remi_ind['industry'], errors='coerce')
+		remi_ind = remi_ind.set_index(['county_id','industry'])['employment']
+		remi_labor_force_ind = remi_ind * worker_to_emp_ratio_ind
+		
+		non_gq_workers_occ = get_non_gq_workers(pums_person, 'occupation')
+		worker_to_emp_ratio_occ = get_workers_to_remi_emp_ratio_occ(util, non_gq_workers_occ, util.get_setting('base_year'), category_col)
+		remi_emp = remi_emp.rename(columns={'occupation_code':'occupation'}).set_index(['county_id','occupation'])['employment']
+		remi_labor_force_occ = remi_emp * worker_to_emp_ratio_occ
 
-	# copy just hh to new series to calculate hhsz and workers which are based on hh
-	remi_hh = remi_age['hh'].copy()
-	# mutiply hh by hhsz rates by age group of head
-	remi_hhsz = remi_hh * hhsz_rates
-	hhsz_out = remi_hhsz.dropna().unstack().add_prefix('hhsz').groupby(['county_id']).sum()
-	# multiply hhsz by workers per hhsz rates to get workers by hhsz and age group of head
-	remi_workers = remi_hhsz * workers_per_hhsz_rates
-	remi_workers_out = remi_workers.dropna().unstack().add_prefix('workers').groupby(['county_id']).sum()
+		# copy just hh to new series to calculate hhsz and workers which are based on hh
+		remi_hh = remi_age['hh'].copy()
+		# mutiply hh by hhsz rates by age group of head
+		remi_hhsz = remi_hh * hhsz_rates
+		hhsz_out = remi_hhsz.dropna().unstack().add_prefix('hhsz').groupby(['county_id']).sum()
+		# multiply hhsz by workers per hhsz rates to get workers by hhsz and age group of head
+		remi_workers = remi_hhsz * workers_per_hhsz_rates
+		remi_workers_out = remi_workers.dropna().unstack().add_prefix('workers').groupby(['county_id']).sum()
 
-	# aggregate age groups to county level and merge with hh, hhsz, and workers by hhsz
-	out = aggregate_age_groups(remi_age[['hhpop']]).copy()
-	out = out["hhpop"].unstack()
-	hh_out = remi_age.groupby('county_id')['hh'].sum()
-	out['hh'] = hh_out
-	out = out.merge(hhsz_out, left_index=True, right_index=True, how="left")
-	out = out.merge(remi_workers_out, left_index=True, right_index=True, how="left")
-	# merge labor force by industry and occupation
-	out_labor_force_ind = remi_labor_force_ind.unstack().add_prefix('naics_')
-	out = out.merge(out_labor_force_ind, left_index=True, right_index=True, how="left")
-	out_labor_force_occ = remi_labor_force_occ.unstack().add_prefix('soc_')
-	out = out.merge(out_labor_force_occ, left_index=True, right_index=True, how="left")
-	out = out.fillna(0).round(0).astype(int)
-	# clean up and save county_controls (marginals) table for use later by popsim
-	out = out.rename(columns={"hh": "num_hh"})
-	out.index.name = "county_id"
-	util.save_table("county_controls", out.reset_index())
+		# aggregate age groups to county level and merge with hh, hhsz, and workers by hhsz
+		out = aggregate_age_groups(remi_age[['hhpop']]).copy()
+		out = out["hhpop"].unstack()
+		hh_out = remi_age.groupby('county_id')['hh'].sum()
+		out['hh'] = hh_out
+		out = out.merge(hhsz_out, left_index=True, right_index=True, how="left")
+		out = out.merge(remi_workers_out, left_index=True, right_index=True, how="left")
+		# merge labor force by industry and occupation
+		out_labor_force_ind = remi_labor_force_ind.unstack().add_prefix('naics_')
+		out = out.merge(out_labor_force_ind, left_index=True, right_index=True, how="left")
+		out_labor_force_occ = remi_labor_force_occ.unstack().add_prefix('soc_')
+		out = out.merge(out_labor_force_occ, left_index=True, right_index=True, how="left")
+		out = out.fillna(0).round(0).astype(int)
+		# clean up and save county_controls (marginals) table for use later by popsim
+		out = out.rename(columns={"hh": "num_hh"})
+		out.index.name = "county_id"
+		if year == forecast_year:
+			util.save_table("county_controls", out.reset_index())
+		
+	util.save_table("counties_summed_all_years", counties_summed_all_years)
 
 def run_step(context):
 	print("Generating county controls from REMI and prepared PUMS...")

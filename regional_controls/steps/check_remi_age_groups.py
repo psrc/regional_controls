@@ -6,7 +6,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from utils import Util
+from regional_controls.utils import Util
 
 
 def _get_repo_root() -> Path:

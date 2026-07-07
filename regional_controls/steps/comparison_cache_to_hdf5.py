@@ -1,6 +1,6 @@
 import subprocess
 from pathlib import Path
-from utils import Util
+from regional_controls.utils import Util
 
 def get_cache_dir(util):
     # Support both legacy and current setting names.
